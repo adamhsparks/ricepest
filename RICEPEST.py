@@ -4,10 +4,10 @@
 #DEVELOPED BY: Confidence Duku (AfricaRice), Adam Sparks (IRRI), Sander Zwart (AfricaRice
 #BASED ON WORK DONE BY: Laetitia Willocquet and Serge Savary (IRRI)
 
-#ORIGINAL VERSION WITH UNMODIFIED PS3
+#ORIGINAL VERSION of RICEPEST WITH UNMODIFIED PS3
 
-import arcpy
-import sys
+import georasters
+import numpy
 import os
 
 arcpy.AddMessage("\n            NAME:             RICEPEST Spatial Model")
@@ -23,11 +23,6 @@ scriptPath = sys.argv[0]
 PathName = os.path.dirname(scriptPath)
 
 #Setting environment variables;
-arcpy.env.extent = "MINOF"
-arcpy.env.scratchWorkspace = PathName + "\\Output"
-arcpy.env.cellSize = "MINOF"
-arcpy.env.workspace =  PathName + "\\ab50"
-arcpy.env.overwriteOutput = 1
 path = PathName + "\\Output\\"
 path1 = PathName + "\\Yields\\"
 
