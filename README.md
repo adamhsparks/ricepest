@@ -2,7 +2,7 @@
 
 [![Project Status: WIP – Initial development is in progress, but there has not yet been a stable, usable release suitable for the public.](https://www.repostatus.org/badges/latest/wip.svg)](https://www.repostatus.org/#wip)
 
-NAME: RICEPEST Spatial Model
+NAME: ricepest Spatial Model
 
 DESCRIPTION: Generic RICEPEST tool for calculating attainable and actual yields based on supplied parameters
 
