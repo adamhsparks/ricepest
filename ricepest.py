@@ -6,25 +6,35 @@
 
 #ORIGINAL VERSION of RICEPEST WITH UNMODIFIED PS3
 
-import georasters
+import rasterio
+from rasterio.plot import show
+from rasterio.enums import Resampling
+import numpy as np
+import logging
 import numpy
 import os
-
-arcpy.AddMessage("\n            NAME:             RICEPEST Spatial Model")
-arcpy.AddMessage("              DEVELOPED BY:     Confidence Duku (AfricaRice), Adam Sparks (IRRI) and Sander Zwart (AfricaRice)")
-arcpy.AddMessage("              BASED ON WORK BY: Laetitia Willocquet and Serge Savary (IRRI)")
-arcpy.AddMessage("              REQUIREMENTS:     ArcGIS Spatial Analyst Extension")
+from pathlib import Path
+logging.basicConfig(level=logging.INFO)
 
 
-arcpy.AddMessage("\nSetting Environment Variables")
+
+logging.info("              NAME:             RICEPEST Spatial Model")
+logging.info("              DEVELOPED BY:     Confidence Duku (AfricaRice), Adam Sparks (IRRI) and Sander Zwart (AfricaRice)")
+logging.info("              BASED ON WORK BY: Laetitia Willocquet and Serge Savary (IRRI)")
+logging.info("              REQUIREMENTS:     ArcGIS Spatial Analyst Extension")
+
+
+logging.info("\nSetting Environment Variables")
 
 #obtaining directory for script and associated folders
-scriptPath = sys.argv[0]
-PathName = os.path.dirname(scriptPath)
+# scriptPath = sys.argv[0]
+# PathName = os.path.dirname(scriptPath)
+PathName = Path.cwd()
+
 
 #Setting environment variables;
-path = PathName + "\\Output\\"
-path1 = PathName + "\\Yields\\"
+output_dir = PathName / "Output"
+yields_dir = PathName / "Yields"
 
 #analysisType = sys.argv[4]
 analysisType = "Actual Yield"
@@ -32,16 +42,84 @@ cropEst = "Transplanted"
 TransplantDays = 20
 prodSituation = "PS2"
 
-arcpy.AddMessage("RUNNING, " + prodSituation + " ," + analysisType)
-arcpy.CheckOutExtension("Spatial")
+logging.info("RUNNING, " + prodSituation + " ," + analysisType)
+# arcpy.CheckOutExtension("Spatial")
 
 #Prefix the climate and disease data with the following to distinguish them
-RadGDB = arcpy.ListRasters("rad*", "GRID")
-TempGDB = arcpy.ListRasters("tmean*", "GRID")
-IniTemp = arcpy.ListRasters("i*", "GRID")
-BlastGDB = arcpy.ListRasters("*blast*", "TIF")
-BlightGDB = arcpy.ListRasters("*bblight*", "TIF")
+data_dir = PathName / "Data"
+# RadGDB = arcpy.ListRasters("rad*", "GRID")
+# TempGDB = arcpy.ListRasters("tmean*", "GRID")
+# IniTemp = arcpy.ListRasters("i*", "GRID")
+# BlastGDB = arcpy.ListRasters("*blast*", "TIF")
+# BlightGDB = arcpy.ListRasters("*bblight*", "TIF")
 
+###################################################
+#####  New code to read in the data files  
+
+# get raster paths
+RadGDB = list(data_dir.rglob("rad*"))
+RadGDB = [path for path in RadGDB if path.is_dir()]
+TempGDB = list(data_dir.rglob("tmean*"))
+TempGDB = [path for path in TempGDB if path.is_dir()]
+IniTemp = list(data_dir.rglob("i*"))
+IniTemp = [path for path in IniTemp if path.is_dir()]
+IniTemp = [path for path in IniTemp if path.stem != 'info']
+BlastGDB = list(data_dir.rglob("*blast*.tif",))
+BlightGDB =list(data_dir.rglob("*bblight*.tif",))
+all_rasters = BlightGDB + BlastGDB + IniTemp + TempGDB + RadGDB
+logging.info(f" {len(all_rasters)} rasters found.")
+raster_paths = all_rasters
+
+
+def check_raster_crs_all_equal(raster_paths:list):
+    crss = []
+    for path in raster_paths:
+        with rasterio.open(path) as src:
+            crss.append(src.crs)
+    crss = set(crss)
+    logging.debug(crss)
+    return crss
+
+def find_min_raster_resolution(raster_paths:list):
+    res = []
+    for path in raster_paths:
+        with rasterio.open(path) as src:
+            res.append(src.res[0])
+    return min(res)    
+
+def get_min_intersecting_bounds(raster_paths):
+    boundss = []
+    for path in raster_paths:
+        with rasterio.open(path) as src:
+            boundss.append(src.bounds)
+    mx = np.max(np.vstack(boundss), axis=0)
+    mn = np.min(np.vstack(boundss), axis=0)
+    intersecting_bounds = (mx[0], mx[1], mn[2], mn[3])
+    return intersecting_bounds
+
+def read_raster_using_bounds(raster_path:Path, bounds:[float,float,float,float] , resampling=Resampling.nearest)->np.ndarray:
+    """read a rasterio window from a raster, with non-matching profile. output tile matches location and size of input window"""
+    with rasterio.open(raster_path) as src:
+
+        raster_window = rasterio.windows.from_bounds(*bounds, src.transform)
+        img = src.read(window=raster_window, boundless=True, out_shape=(src.count, int(raster_window.height), int(raster_window.width)), resampling=resampling)
+    return img
+
+
+raster_path = raster_paths[0]
+assert check_raster_crs_all_equal(all_rasters), "all rasters must be in the same CRS, reproject before proceeding"
+res = find_min_raster_resolution(raster_paths)
+bounds = get_min_intersecting_bounds(raster_paths)
+img = read_raster_using_bounds(raster_path, bounds , resampling=Resampling.nearest)
+show(img)
+
+
+
+# check as crs are equal
+# find the intersection of the raster bounds
+# find the smallest pixel size
+#########################################
+### edits incomplete below this point
 
 if prodSituation == "PS1":
     PANW = 0
@@ -57,7 +135,7 @@ if prodSituation == "PS1":
 
     #check if rice variety is direct seeded or transplanted.
     if cropEst == "Direct Seeded":
-        arcpy.AddMessage("\nCalculating Sum of Initial Temperature for Direct Seeded Systems")
+        logging.info("\nCalculating Sum of Initial Temperature for Direct Seeded Systems")
         for raster in IniTemp:
             test = 0
             where1 = "\"VALUE\" < %d" % test
@@ -67,7 +145,7 @@ if prodSituation == "PS1":
                 rt = rt + 1
                 ty = str(rt)
                 name = "out2_" + ty
-                out2.save(path + name)
+                out2.save(output_dir / name)
             else:
                 out1 = arcpy.sa.Minus(raster, TBASE)
                 out6 = arcpy.sa.Con(out1, 0, out1, where1)
@@ -75,9 +153,9 @@ if prodSituation == "PS1":
                 rt = rt + 1
                 ty = str(rt)
                 name = "out2_" + ty
-                out2.save(path + name)
+                out2.save(output_dir / name)
     elif cropEst == "Transplanted":
-        arcpy.AddMessage("Calculating Sum of Initial Temperature for Transplanted Systems\n")
+        logging.info("Calculating Sum of Initial Temperature for Transplanted Systems\n")
         for raster in IniTemp:
             test = 0
             where1 = "\"VALUE\" < %d" % test
@@ -108,7 +186,7 @@ if prodSituation == "PS1":
                 rt = rt + 1
                 ty = str(rt)
                 name = "out23_" + ty
-                out23.save(path + name)
+                out23.save(output_dir / name)
             else:
                 out1 = arcpy.sa.Minus(raster, TBASE)
                 out6 = arcpy.sa.Con(out1, 0, out1, where1)
@@ -117,13 +195,13 @@ if prodSituation == "PS1":
                 ty = str(rt)
                 name = "out23_" + ty
                 name1 = "sumtr"
-                out23.save(path + name)
+                out23.save(output_dir / name)
 
         out22 = 0.785 * out4
-        out22.save(path + "tshock")
+        out22.save(output_dir / "tshock")
 
         out2 = out23 - out22
-        out2.save(path + name1)
+        out2.save(output_dir / name1)
 
 
     #calculating sum of temp above TBASE
@@ -136,8 +214,8 @@ if prodSituation == "PS1":
         #calculating sum of temperature
         bn = i + 15
         ft = str(bn)
-        arcpy.AddMessage("SIMULATION AT " + ft + " DACE")
-        arcpy.AddMessage("  Calculating Sum of Temperature above TBASE")
+        logging.info("SIMULATION AT " + ft + " DACE")
+        logging.info("  Calculating Sum of Temperature above TBASE")
         if i == 0:
             out4 = arcpy.sa.Minus(temp, TBASE)
             out5 = arcpy.sa.Con(out4, 0, out4, where1)
@@ -145,7 +223,7 @@ if prodSituation == "PS1":
             i = i + 1
             ty = str(i)
             name = "sumt" + ty
-            co_sumt.save(path + name)
+            co_sumt.save(output_dir / name)
         else:
             DTemp = arcpy.sa.Minus(temp, TBASE)
             DTemp1 = arcpy.sa.Con(DTemp, 0, DTemp, where1)
@@ -153,10 +231,10 @@ if prodSituation == "PS1":
             i = i + 1
             ty = str(i)
             name = "sumt" + ty
-            co_sumt.save(path + name)
+            co_sumt.save(output_dir / name)
 
         def sla():
-            arcpy.AddMessage("  Calculating Specific Leaf Area")
+            logging.info("  Calculating Specific Leaf Area")
             #calculating SLA
             #always add 1 to the value of sumt**
             #hence sumt007 with value of 0.07 becomes 1.07 in the equation
@@ -208,7 +286,7 @@ if prodSituation == "PS1":
             blbrf = arcpy.sa.Minus(oneRaster, blight)
 
         elif analysisType == "Actual Yield":
-            arcpy.AddMessage("  Calculating Reduction factor for BLIGHT")
+            logging.info("  Calculating Reduction factor for BLIGHT")
             for blight in BlightGDB:
                 blightDate = blight[7:]
                 if tempDate == blightDate:
@@ -224,7 +302,7 @@ if prodSituation == "PS1":
             rlbrf = arcpy.sa.Minus(oneRaster, blast)
 
         elif analysisType == "Actual Yield":
-            arcpy.AddMessage("  Calculating Reduction factor for BLAST")
+            logging.info("  Calculating Reduction factor for BLAST")
             for blast in BlastGDB:
                 blastDate = blast[6:]
                 if tempDate == blastDate:
@@ -266,7 +344,7 @@ if prodSituation == "PS1":
 
         #Calculating LAI after treatment with Sheath Blight + Brown Spot + Bacterial leaf Blight
         def LAI ():
-            arcpy.AddMessage("  Calculating Leaf Area Index")
+            logging.info("  Calculating Leaf Area Index")
             thisSLA = sla()
             this_shb1 = SHB()
             this_shbrf = this_shb1[1]
@@ -293,7 +371,7 @@ if prodSituation == "PS1":
 
         #Calculating the Rate of Growth and the Pool of assimilates
         def POOL (k=-0.6):
-            arcpy.AddMessage("  Calculating Pool of assimilates")
+            logging.info("  Calculating Pool of assimilates")
             sumt09 = (-435 * (1.9**2))+(2755 * 1.9)-2320
             where09 = "VALUE <= 0.9"
             RUE = arcpy.sa.Con(co_sumt, 1.3, 1.2, where09)
@@ -310,10 +388,10 @@ if prodSituation == "PS1":
             #mRG = arcpy.sa.Times(RG, Days)
             ty = str(i)
             name = "pool" + ty
-            RG.save(path + name)
+            RG.save(output_dir / name)
             return RG
 
-        arcpy.AddMessage("  Calculating coefficients of partitioning")
+        logging.info("  Calculating coefficients of partitioning")
         #Calculating the coefficient of partitioning of leaves relative to DVS
         def COPARTL ():
             sumt00 = (-435 * (1**2))+(2755 * 1)-2320
@@ -354,7 +432,7 @@ if prodSituation == "PS1":
         this_POOL = POOL()
 
         def PART ():
-            arcpy.AddMessage("  Calculating partitioning of assimilates")
+            logging.info("  Calculating partitioning of assimilates")
             #Calculate the partitioning of assimilates to leaves
             this_copartr = COPARTR()
             this = arcpy.sa.Minus(1, this_copartr)
@@ -376,7 +454,7 @@ if prodSituation == "PS1":
 
         #Redistribution of reserves accumulated in the stems
         def RDIST():
-            arcpy.AddMessage("  Calculating the redistribution of reserves accumulated in the stems")
+            logging.info("  Calculating the redistribution of reserves accumulated in the stems")
             sumt1 = (-435 * (2**2))+(2755 * 2)-2320
             where1 = "\"VALUE\" < %d" % sumt1
             rdist = arcpy.sa.Con(co_sumt, 0, 4.42, where1)
@@ -384,7 +462,7 @@ if prodSituation == "PS1":
 
         #Calculating the relative rate of senescence
         def RRSENL ():
-            arcpy.AddMessage("  Calculating the relative rate of senescence")
+            logging.info("  Calculating the relative rate of senescence")
             #sumt107 = (-425 * (2.07**2))+(2550 * 2.07)-2125
             sumt13 = (-435 * (2.3**2))+(2755 * 2.3)-2320
             #sumt163 = (-425 * (2.63**2))+(2550 * 2.63)-2125
@@ -405,7 +483,7 @@ if prodSituation == "PS1":
         this_shb = SHB()
         this_trshbl = this_shb[0]
 
-        arcpy.AddMessage("  Calculating the dry weight of organs\n")
+        logging.info("  Calculating the dry weight of organs\n")
 
         #Calculate the increase in dry weight for panicles
         ppanw1 = arcpy.sa.Plus(this_rdist, this_partp)
@@ -439,7 +517,7 @@ if prodSituation == "PS1":
             thisLEAFW = arcpy.sa.Plus(LEAFW, pleafw2)
             ty = str(i)
             name = "leafw" + ty
-            thisLEAFW.save(path + name)
+            thisLEAFW.save(output_dir / name)
         else:
             thisPANW = thisPANW + ppanw3
             thisSTEMW = thisSTEMW + pstemw
@@ -447,11 +525,11 @@ if prodSituation == "PS1":
             thisLEAFW = thisLEAFW + pleafw2
             ty = str(i)
             name = "leafw" + ty
-            thisLEAFW.save(path + name)
+            thisLEAFW.save(output_dir / name)
 
-    output =  path1 + "Yield_PS1"
+    output =  yields_dir + "Yield_PS1"
     thisPANW.save(output)
-    arcpy.AddMessage("COMPLETED")
+    logging.info("COMPLETED")
 
 
 elif prodSituation == "PS2":
@@ -468,7 +546,7 @@ elif prodSituation == "PS2":
 
     #check if rice variety is directed seeded or transplanted.
     if cropEst == "Direct Seeded":
-        arcpy.AddMessage("Calculating Sum of Initial Temperature for Direct Seeded Systems")
+        logging.info("Calculating Sum of Initial Temperature for Direct Seeded Systems")
         for raster in IniTemp:
             test = 0
             where1 = "\"VALUE\" < %d" % test
@@ -478,7 +556,7 @@ elif prodSituation == "PS2":
                 rt = rt + 1
                 ty = str(rt)
                 name = "out2_" + ty
-                out2.save(path + name)
+                out2.save(output_dir / name)
             else:
                 out1 = arcpy.sa.Minus(raster, TBASE)
                 out6 = arcpy.sa.Con(out1, 0, out1, where1)
@@ -486,9 +564,9 @@ elif prodSituation == "PS2":
                 rt = rt + 1
                 ty = str(rt)
                 name = "out2_" + ty
-                out2.save(path + name)
+                out2.save(output_dir / name)
     elif cropEst == "Transplanted":
-        arcpy.AddMessage("Calculating Sum of Initial Temperature for Transplanted Systems\n")
+        logging.info("Calculating Sum of Initial Temperature for Transplanted Systems\n")
         for raster in IniTemp:
             test = 0
             where1 = "\"VALUE\" < %d" % test
@@ -519,7 +597,7 @@ elif prodSituation == "PS2":
                 rt = rt + 1
                 ty = str(rt)
                 name = "out23_" + ty
-                out23.save(path + name)
+                out23.save(output_dir / name)
             else:
                 out1 = arcpy.sa.Minus(raster, TBASE)
                 out6 = arcpy.sa.Con(out1, 0, out1, where1)
@@ -528,13 +606,13 @@ elif prodSituation == "PS2":
                 ty = str(rt)
                 name = "out23_" + ty
                 name1 = "sumtr"
-                out23.save(path + name)
+                out23.save(output_dir / name)
 
         out22 = 0.785 * out4
-        out22.save(path + "tshock")
+        out22.save(output_dir / "tshock")
 
         out2 = out23 - out22
-        out2.save(path + name1)
+        out2.save(output_dir / name1)
 
 
     #calculating sum of temp above TBASE
@@ -547,8 +625,8 @@ elif prodSituation == "PS2":
         #calculating sum of temperature
         bn = i + 15
         ft = str(bn)
-        arcpy.AddMessage("SIMULATION AT " + ft + " DACE")
-        arcpy.AddMessage("  Calculating Sum of Temperature above TBASE")
+        logging.info("SIMULATION AT " + ft + " DACE")
+        logging.info("  Calculating Sum of Temperature above TBASE")
         if i == 0:
             out4 = arcpy.sa.Minus(temp, TBASE)
             out5 = arcpy.sa.Con(out4, 0, out4, where1)
@@ -556,7 +634,7 @@ elif prodSituation == "PS2":
             i = i + 1
             ty = str(i)
             name = "sumt" + ty
-            co_sumt.save(path + name)
+            co_sumt.save(output_dir / name)
         else:
             DTemp = arcpy.sa.Minus(temp, TBASE)
             DTemp1 = arcpy.sa.Con(DTemp, 0, DTemp, where1)
@@ -564,10 +642,10 @@ elif prodSituation == "PS2":
             i = i + 1
             ty = str(i)
             name = "sumt" + ty
-            co_sumt.save(path + name)
+            co_sumt.save(output_dir / name)
 
         def sla():
-            arcpy.AddMessage("  Calculating Specific Leaf Area")
+            logging.info("  Calculating Specific Leaf Area")
             #calculating SLA
             #always add 1 to the value of sumt**
             #hence sumt007 with value of 0.07 becomes 1.07 in the equation
@@ -619,7 +697,7 @@ elif prodSituation == "PS2":
             blbrf = arcpy.sa.Minus(oneRaster, blight)
 
         elif analysisType == "Actual Yield":
-            arcpy.AddMessage("  Calculating Reduction factor for BLIGHT")
+            logging.info("  Calculating Reduction factor for BLIGHT")
             for blight in BlightGDB:
                 blightDate = blight[7:]
                 if tempDate == blightDate:
@@ -635,7 +713,7 @@ elif prodSituation == "PS2":
             rlbrf = arcpy.sa.Minus(oneRaster, blast)
 
         elif analysisType == "Actual Yield":
-            arcpy.AddMessage("  Calculating Reduction factor for BLAST")
+            logging.info("  Calculating Reduction factor for BLAST")
             for blast in BlastGDB:
                 blastDate = blast[6:]
                 if tempDate == blastDate:
@@ -677,7 +755,7 @@ elif prodSituation == "PS2":
 
         #Calculating LAI after treatment with Sheath Blight + Brown Spot + Bacterial leaf Blight
         def LAI ():
-            arcpy.AddMessage("  Calculating Leaf Area Index")
+            logging.info("  Calculating Leaf Area Index")
             thisSLA = sla()
             this_shb1 = SHB()
             this_shbrf = this_shb1[1]
@@ -704,7 +782,7 @@ elif prodSituation == "PS2":
 
         #Calculating the Rate of Growth and the Pool of assimilates
         def POOL (k=-0.6):
-            arcpy.AddMessage("  Calculating Pool of assimilates")
+            logging.info("  Calculating Pool of assimilates")
             where1 = "VALUE <= 0.9"
             RUE = arcpy.sa.Con(co_sumt, 1.1, 1, where1)
             this_LAI = LAI()
@@ -721,11 +799,11 @@ elif prodSituation == "PS2":
             #mRG = arcpy.sa.Times(RG, Days)
             ty = str(i)
             name = "pool" + ty
-            RG.save(path + name)
+            RG.save(output_dir / name)
             return RG
 
 
-        arcpy.AddMessage("  Calculating coefficients of partitioning")
+        logging.info("  Calculating coefficients of partitioning")
         #Calculating the coefficient of partitioning of leaves relative to DVS
         def COPARTL ():
             sumt00 = (-435 * (1**2))+(2755 * 1)-2320
@@ -765,7 +843,7 @@ elif prodSituation == "PS2":
         this_POOL = POOL()
 
         def PART ():
-            arcpy.AddMessage("  Calculating partitioning of assimilates")
+            logging.info("  Calculating partitioning of assimilates")
             #Calculate the partitioning of assimilates to leaves
             this_copartr = COPARTR()
             this = arcpy.sa.Minus(1, this_copartr)
@@ -787,7 +865,7 @@ elif prodSituation == "PS2":
 
         #Redistribution of reserves accumulated in the stems
         def RDIST():
-            arcpy.AddMessage("  Calculating the redistribution of reserves accumulated in the stems")
+            logging.info("  Calculating the redistribution of reserves accumulated in the stems")
             sumt1 = (-435 * (2**2))+(2755 * 2)-2320
             where1 = "\"VALUE\" < %d" % sumt1
             rdist = arcpy.sa.Con(co_sumt, 0, 4.42, where1)
@@ -795,7 +873,7 @@ elif prodSituation == "PS2":
 
         #Calculating the relative rate of senescence
         def RRSENL ():
-            arcpy.AddMessage("  Calculating the relative rate of senescence")
+            logging.info("  Calculating the relative rate of senescence")
             #sumt107 = (-425 * (2.07**2))+(2550 * 2.07)-2125
             sumt13 = (-435 * (2.3**2))+(2755 * 2.3)-2320
             #sumt163 = (-425 * (2.63**2))+(2550 * 2.63)-2125
@@ -816,7 +894,7 @@ elif prodSituation == "PS2":
         this_shb = SHB()
         this_trshbl = this_shb[0]
 
-        arcpy.AddMessage("  Calculating the dry weight of organs\n")
+        logging.info("  Calculating the dry weight of organs\n")
 
         #Calculate the increase in dry weight for panicles
         ppanw1 = arcpy.sa.Plus(this_rdist, this_partp)
@@ -851,7 +929,7 @@ elif prodSituation == "PS2":
             thisLEAFW = arcpy.sa.Plus(LEAFW, pleafw2)
             ty = str(i)
             name = "leafw" + ty
-            thisLEAFW.save(path + name)
+            thisLEAFW.save(output_dir / name)
         else:
             thisPANW = thisPANW + ppanw3
             thisSTEMW = thisSTEMW + pstemw
@@ -859,11 +937,11 @@ elif prodSituation == "PS2":
             thisLEAFW = thisLEAFW + pleafw2
             ty = str(i)
             name = "leafw" + ty
-            thisLEAFW.save(path + name)
+            thisLEAFW.save(output_dir / name)
 
-    output =  path1 + "Yield_PS2"
+    output =  yields_dir + "Yield_PS2"
     thisPANW.save(output)
-    arcpy.AddMessage("COMPLETED")
+    logging.info("COMPLETED")
 
 
 elif prodSituation == "PS3":
@@ -880,7 +958,7 @@ elif prodSituation == "PS3":
 
     #check if rice variety is direct seeded or transplanted.
     if cropEst == "Direct Seeded":
-        arcpy.AddMessage("Calculating Sum of Initial Temperature for Direct Seeded Systems")
+        logging.info("Calculating Sum of Initial Temperature for Direct Seeded Systems")
         for raster in IniTemp:
             test = 0
             where1 = "\"VALUE\" < %d" % test
@@ -890,7 +968,7 @@ elif prodSituation == "PS3":
                 rt = rt + 1
                 ty = str(rt)
                 name = "out2_" + ty
-                out2.save(path + name)
+                out2.save(output_dir / name)
             else:
                 out1 = arcpy.sa.Minus(raster, TBASE)
                 out6 = arcpy.sa.Con(out1, 0, out1, where1)
@@ -898,9 +976,9 @@ elif prodSituation == "PS3":
                 rt = rt + 1
                 ty = str(rt)
                 name = "out2_" + ty
-                out2.save(path + name)
+                out2.save(output_dir / name)
     elif cropEst == "Transplanted":
-        arcpy.AddMessage("Calculating Sum of Initial Temperature for Transplanted Systems\n")
+        logging.info("Calculating Sum of Initial Temperature for Transplanted Systems\n")
         for raster in IniTemp:
             test = 0
             where1 = "\"VALUE\" < %d" % test
@@ -931,7 +1009,7 @@ elif prodSituation == "PS3":
                 rt = rt + 1
                 ty = str(rt)
                 name = "out23_" + ty
-                out23.save(path + name)
+                out23.save(output_dir / name)
             else:
                 out1 = arcpy.sa.Minus(raster, TBASE)
                 out6 = arcpy.sa.Con(out1, 0, out1, where1)
@@ -940,13 +1018,13 @@ elif prodSituation == "PS3":
                 ty = str(rt)
                 name = "out23_" + ty
                 name1 = "sumtr"
-                out23.save(path + name)
+                out23.save(output_dir / name)
 
         out22 = 0.785 * out4
-        out22.save(path + "tshock")
+        out22.save(output_dir / "tshock")
 
         out2 = out23 - out22
-        out2.save(path + name1)
+        out2.save(output_dir / name1)
 
 
     #calculating sum of temp above TBASE
@@ -959,8 +1037,8 @@ elif prodSituation == "PS3":
         #calculating sum of temperature
         bn = i + 15
         ft = str(bn)
-        arcpy.AddMessage("SIMULATION AT " + ft + " DACE")
-        arcpy.AddMessage("  Calculating Sum of Temperature above TBASE")
+        logging.info("SIMULATION AT " + ft + " DACE")
+        logging.info("  Calculating Sum of Temperature above TBASE")
         if i == 0:
             out4 = arcpy.sa.Minus(temp, TBASE)
             out5 = arcpy.sa.Con(out4, 0, out4, where1)
@@ -968,7 +1046,7 @@ elif prodSituation == "PS3":
             i = i + 1
             ty = str(i)
             name = "sumt" + ty
-            co_sumt.save(path + name)
+            co_sumt.save(output_dir / name)
         else:
             DTemp = arcpy.sa.Minus(temp, TBASE)
             DTemp1 = arcpy.sa.Con(DTemp, 0, DTemp, where1)
@@ -976,10 +1054,10 @@ elif prodSituation == "PS3":
             i = i + 1
             ty = str(i)
             name = "sumt" + ty
-            co_sumt.save(path + name)
+            co_sumt.save(output_dir / name)
 
         def sla():
-            arcpy.AddMessage("  Calculating Specific Leaf Area")
+            logging.info("  Calculating Specific Leaf Area")
             #calculating SLA
             #always add 1 to the value of sumt**
             #hence sumt007 with value of 0.07 becomes 1.07 in the equation
@@ -1027,7 +1105,7 @@ elif prodSituation == "PS3":
 ##            bsbrf = arcpy.sa.Times(oneRaster, brownSpot)
 ##
 ##        elif analysisType == "Actual Yield":
-##            arcpy.AddMessage("  Calculating Reduction Factor for BS")
+##            logging.info("  Calculating Reduction Factor for BS")
 ##            for brownSpot in BSpotGDB:
 ##                bsDate = brownSpot[2:]
 ##                if tempDate == bsDate:
@@ -1044,7 +1122,7 @@ elif prodSituation == "PS3":
             blbrf = arcpy.sa.Minus(oneRaster, blight)
 
         elif analysisType == "Actual Yield":
-            arcpy.AddMessage("  Calculating Reduction factor for BLIGHT")
+            logging.info("  Calculating Reduction factor for BLIGHT")
             for blight in BlightGDB:
                 blightDate = blight[7:]
                 if tempDate == blightDate:
@@ -1060,7 +1138,7 @@ elif prodSituation == "PS3":
             rlbrf = arcpy.sa.Minus(oneRaster, blast)
 
         elif analysisType == "Actual Yield":
-            arcpy.AddMessage("  Calculating Reduction factor for BLAST")
+            logging.info("  Calculating Reduction factor for BLAST")
             for blast in BlastGDB:
                 blastDate = blast[6:]
                 if tempDate == blastDate:
@@ -1103,7 +1181,7 @@ elif prodSituation == "PS3":
 
         #Calculating LAI after treatment with Sheath Blight + Brown Spot + Bacterial leaf Blight
         def LAI ():
-            arcpy.AddMessage("  Calculating Leaf Area Index")
+            logging.info("  Calculating Leaf Area Index")
             thisSLA = sla()
             this_shb1 = SHB()
             this_shbrf = this_shb1[1]
@@ -1130,7 +1208,7 @@ elif prodSituation == "PS3":
 
         #Calculating the Rate of Growth and the Pool of assimilates
         def POOL (k=-0.6):
-            arcpy.AddMessage("  Calculating Pool of assimilates")
+            logging.info("  Calculating Pool of assimilates")
             sumt09 = (-650 * (1.9**2))+(3750 * 1.9)-3100
             where09 = "\"VALUE\" <= %d" % sumt09
             RUE = arcpy.sa.Con(co_sumt, 1.4, 0.8, where09)
@@ -1147,11 +1225,11 @@ elif prodSituation == "PS3":
             #mRG = arcpy.sa.Times(RG, Days)
             ty = str(i)
             name = "pool" + ty
-            RG.save(path + name)
+            RG.save(output_dir / name)
             return RG
 
 
-        arcpy.AddMessage("  Calculating coefficients of partitioning")
+        logging.info("  Calculating coefficients of partitioning")
         #Calculating the coefficient of partitioning of leaves relative to DVS
         def COPARTL ():
             sumt00 = (-650 * (1**2))+(3750 * 1)-3100
@@ -1193,7 +1271,7 @@ elif prodSituation == "PS3":
         this_POOL = POOL()
 
         def PART ():
-            arcpy.AddMessage("  Calculating partitioning of assimilates")
+            logging.info("  Calculating partitioning of assimilates")
             #Calculate the partitioning of assimilates to leaves
             this_copartr = COPARTR()
             this = arcpy.sa.Minus(1, this_copartr)
@@ -1215,7 +1293,7 @@ elif prodSituation == "PS3":
 
         #Redistribution of reserves accumulated in the stems
         def RDIST():
-            arcpy.AddMessage("  Calculating the redistribution of reserves accumulated in the stems")
+            logging.info("  Calculating the redistribution of reserves accumulated in the stems")
             sumt1 = (-650 * (2**2))+(3750 * 2)-3100
             where1 = "\"VALUE\" < %d" % sumt1
             rdist = arcpy.sa.Con(co_sumt, 0, 4.42, where1)
@@ -1223,7 +1301,7 @@ elif prodSituation == "PS3":
 
         #Calculating the relative rate of senescence
         def RRSENL ():
-            arcpy.AddMessage("  Calculating the relative rate of senescence")
+            logging.info("  Calculating the relative rate of senescence")
             #sumt107 = (-425 * (2.07**2))+(2550 * 2.07)-2125
             sumt13 = (-650 * (2.3**2))+(3750 * 2.3)-3100
             #sumt163 = (-425 * (2.63**2))+(2550 * 2.63)-2125
@@ -1244,7 +1322,7 @@ elif prodSituation == "PS3":
         this_shb = SHB()
         this_trshbl = this_shb[0]
 
-        arcpy.AddMessage("  Calculating the dry weight of organs\n")
+        logging.info("  Calculating the dry weight of organs\n")
         #Calculate the increase in dry weight for panicles
         ppanw1 = arcpy.sa.Plus(this_rdist, this_partp)
 
@@ -1277,7 +1355,7 @@ elif prodSituation == "PS3":
             thisLEAFW = arcpy.sa.Plus(LEAFW, pleafw2)
             ty = str(i)
             name = "leafw" + ty
-            thisLEAFW.save(path + name)
+            thisLEAFW.save(output_dir / name)
         else:
             thisPANW = thisPANW + ppanw3
             thisSTEMW = thisSTEMW + pstemw
@@ -1285,11 +1363,11 @@ elif prodSituation == "PS3":
             thisLEAFW = thisLEAFW + pleafw2
             ty = str(i)
             name = "leafw" + ty
-            thisLEAFW.save(path + name)
+            thisLEAFW.save(output_dir / name)
 
-    output =  path1 + "yield_ps3"
+    output =  yields_dir + "yield_ps3"
     thisPANW.save(output)
-    arcpy.AddMessage("COMPLETED")
+    logging.info("COMPLETED")
 
 
 elif prodSituation == "PS4":
@@ -1307,7 +1385,7 @@ elif prodSituation == "PS4":
 
     #check if rice variety is directed seeded or transplanted.
     if cropEst == "Direct Seeded":
-        arcpy.AddMessage("Calculating Sum of Initial Temperature for Direct Seeded Systems")
+        logging.info("Calculating Sum of Initial Temperature for Direct Seeded Systems")
         for raster in IniTemp:
             test = 0
             where1 = "\"VALUE\" < %d" % test
@@ -1318,7 +1396,7 @@ elif prodSituation == "PS4":
                 rt = rt + 1
                 ty = str(rt)
                 name = "out2_" + ty
-                out2.save(path + name)
+                out2.save(output_dir / name)
             else:
                 out1 = arcpy.sa.Minus(raster, TBASE)
                 out6 = arcpy.sa.Con(out1, 0, out1, where1)
@@ -1326,9 +1404,9 @@ elif prodSituation == "PS4":
                 rt = rt + 1
                 ty = str(rt)
                 name = "out2_" + ty
-                out2.save(path + name)
+                out2.save(output_dir / name)
     elif cropEst == "Transplanted":
-        arcpy.AddMessage("Calculating Sum of Initial Temperature for Transplanted Systems\n")
+        logging.info("Calculating Sum of Initial Temperature for Transplanted Systems\n")
         for raster in IniTemp:
             test = 0
             where1 = "\"VALUE\" < %d" % test
@@ -1359,7 +1437,7 @@ elif prodSituation == "PS4":
                 rt = rt + 1
                 ty = str(rt)
                 name = "out23_" + ty
-                out23.save(path + name)
+                out23.save(output_dir / name)
             else:
                 out1 = arcpy.sa.Minus(raster, TBASE)
                 out6 = arcpy.sa.Con(out1, 0, out1, where1)
@@ -1368,13 +1446,13 @@ elif prodSituation == "PS4":
                 ty = str(rt)
                 name = "out23_" + ty
                 name1 = "sumtr"
-                out23.save(path + name)
+                out23.save(output_dir / name)
 
                 out22 = 0.785 * out4
-                out22.save(path + "tshock")
+                out22.save(output_dir / "tshock")
 
                 out2 = out23 - out22
-                out2.save(path + name1)
+                out2.save(output_dir / name1)
 
 
     #calculating sum of temp above TBASE
@@ -1387,8 +1465,8 @@ elif prodSituation == "PS4":
         #calculating sum of temperature
         bn = i + 15
         ft = str(bn)
-        arcpy.AddMessage("SIMULATION AT " + ft + " DACE")
-        arcpy.AddMessage("  Calculating Sum of Temperature above TBASE")
+        logging.info("SIMULATION AT " + ft + " DACE")
+        logging.info("  Calculating Sum of Temperature above TBASE")
         if i == 0:
             out4 = arcpy.sa.Minus(temp, TBASE)
             out5 = arcpy.sa.Con(out4, 0, out4, where1)
@@ -1396,7 +1474,7 @@ elif prodSituation == "PS4":
             i = i + 1
             ty = str(i)
             name = "sumt" + ty
-            co_sumt.save(path + name)
+            co_sumt.save(output_dir / name)
         else:
             DTemp = arcpy.sa.Minus(temp, TBASE)
             DTemp1 = arcpy.sa.Con(DTemp, 0, DTemp, where1)
@@ -1404,10 +1482,10 @@ elif prodSituation == "PS4":
             i = i + 1
             ty = str(i)
             name = "sumt" + ty
-            co_sumt.save(path + name)
+            co_sumt.save(output_dir / name)
 
         def sla():
-            arcpy.AddMessage("  Calculating Specific Leaf Area")
+            logging.info("  Calculating Specific Leaf Area")
             #calculating SLA
             #always add 1 to the value of sumt**
             #hence sumt007 with value of 0.07 becomes 1.07 in the equation
@@ -1458,7 +1536,7 @@ elif prodSituation == "PS4":
             blbrf = arcpy.sa.Minus(oneRaster, blight)
 
         elif analysisType == "Actual Yield":
-            arcpy.AddMessage("  Calculating Reduction factor for BLIGHT")
+            logging.info("  Calculating Reduction factor for BLIGHT")
             for blight in BlightGDB:
                 blightDate = blight[25:]
                 if tempDate == blightDate:
@@ -1474,7 +1552,7 @@ elif prodSituation == "PS4":
             rlbrf = arcpy.sa.Minus(oneRaster, blast)
 
         elif analysisType == "Actual Yield":
-            arcpy.AddMessage("  Calculating Reduction factor for BLAST")
+            logging.info("  Calculating Reduction factor for BLAST")
             for blast in BlastGDB:
                 blastDate = blast[25:]
                 if tempDate == blastDate:
@@ -1516,7 +1594,7 @@ elif prodSituation == "PS4":
 
         #Calculating LAI after treatment with Sheath Blight + Brown Spot + Bacterial leaf Blight
         def LAI ():
-            arcpy.AddMessage("  Calculating Leaf Area Index")
+            logging.info("  Calculating Leaf Area Index")
             thisSLA = sla()
             this_shb1 = SHB()
             this_shbrf = this_shb1[1]
@@ -1542,7 +1620,7 @@ elif prodSituation == "PS4":
 
         #Calculating the Rate of Growth and the Pool of assimilates
         def POOL (k=-0.6):
-            arcpy.AddMessage("  Calculating Pool of assimilates")
+            logging.info("  Calculating Pool of assimilates")
             where1 = "VALUE <= 0.9"
             RUE = arcpy.sa.Con(co_sumt, 1.3, 1.2, where1)
             this_LAI = LAI()
@@ -1558,10 +1636,10 @@ elif prodSituation == "PS4":
             #mRG = arcpy.sa.Times(RG, Days)
             ty = str(i)
             name = "pool" + ty
-            RG.save(path + name)
+            RG.save(output_dir / name)
             return RG
 
-        arcpy.AddMessage("  Calculating coefficients of partitioning")
+        logging.info("  Calculating coefficients of partitioning")
         #Calculating the coefficient of partitioning of leaves relative to DVS
         def COPARTL ():
             sumt00 = (-300 * (1**2))+(2000 * 1)-1700
@@ -1603,7 +1681,7 @@ elif prodSituation == "PS4":
         this_POOL = POOL()
 
         def PART ():
-            arcpy.AddMessage("  Calculating partitioning of assimilates")
+            logging.info("  Calculating partitioning of assimilates")
             #Calculate the partitioning of assimilates to leaves
             this_copartr = COPARTR()
             this = arcpy.sa.Minus(1, this_copartr)
@@ -1625,7 +1703,7 @@ elif prodSituation == "PS4":
 
         #Redistribution of reserves accumulated in the stems
         def RDIST():
-            arcpy.AddMessage("  Calculating the redistribution of reserves accumulated in the stems")
+            logging.info("  Calculating the redistribution of reserves accumulated in the stems")
             sumt1 = (-300 * (2**2))+(2000 * 2)-1700
             where1 = "\"VALUE\" < %d" % sumt1
             rdist = arcpy.sa.Con(co_sumt, 0, 4.42, where1)
@@ -1633,7 +1711,7 @@ elif prodSituation == "PS4":
 
         #Calculating the relative rate of senescence
         def RRSENL ():
-            arcpy.AddMessage("  Calculating the relative rate of senescence")
+            logging.info("  Calculating the relative rate of senescence")
             #sumt107 = (-425 * (2.07**2))+(2550 * 2.07)-2125
             sumt13 = (-300 * (2.3**2))+(2000 * 2.3)-1700
             #sumt163 = (-425 * (2.63**2))+(2550 * 2.63)-2125
@@ -1654,7 +1732,7 @@ elif prodSituation == "PS4":
         this_shb = SHB()
         this_trshbl = this_shb[0]
 
-        arcpy.AddMessage("  Calculating the dry weight of organs\n")
+        logging.info("  Calculating the dry weight of organs\n")
 
         #Calculate the increase in dry weight for panicles
         ppanw1 = arcpy.sa.Plus(this_rdist, this_partp)
@@ -1688,7 +1766,7 @@ elif prodSituation == "PS4":
             thisLEAFW = arcpy.sa.Plus(LEAFW, pleafw2)
             ty = str(i)
             name = "leafw" + ty
-            thisLEAFW.save(path + name)
+            thisLEAFW.save(output_dir / name)
         else:
             thisPANW = thisPANW + ppanw3
             thisSTEMW = thisSTEMW + pstemw
@@ -1696,11 +1774,11 @@ elif prodSituation == "PS4":
             thisLEAFW = thisLEAFW + pleafw2
             ty = str(i)
             name = "leafw" + ty
-            thisLEAFW.save(path + name)
+            thisLEAFW.save(output_dir / name)
 
-    output =  path1 + "Yield_PS4"
+    output =  yields_dir + "Yield_PS4"
     thisPANW.save(output)
-    arcpy.AddMessage("COMPLETED")
+    logging.info("COMPLETED")
 
 elif prodSituation == "PS5":
     PANW = 0
@@ -1716,7 +1794,7 @@ elif prodSituation == "PS5":
 
     #check if rice variety is directed seeded or transplanted.
     if cropEst == "Direct Seeded":
-        arcpy.AddMessage("Calculating Sum of Initial Temperature for Direct Seeded Systems")
+        logging.info("Calculating Sum of Initial Temperature for Direct Seeded Systems")
         for raster in IniTemp:
             test = 0
             where1 = "\"VALUE\" < %d" % test
@@ -1726,7 +1804,7 @@ elif prodSituation == "PS5":
                 rt = rt + 1
                 ty = str(rt)
                 name = "out2_" + ty
-                out2.save(path + name)
+                out2.save(output_dir / name)
             else:
                 out1 = arcpy.sa.Minus(raster, TBASE)
                 out6 = arcpy.sa.Con(out1, 0, out1, where1)
@@ -1734,9 +1812,9 @@ elif prodSituation == "PS5":
                 rt = rt + 1
                 ty = str(rt)
                 name = "out2_" + ty
-                out2.save(path + name)
+                out2.save(output_dir / name)
     elif cropEst == "Transplanted":
-        arcpy.AddMessage("Calculating Sum of Initial Temperature for Transplanted Systems\n")
+        logging.info("Calculating Sum of Initial Temperature for Transplanted Systems\n")
         for raster in IniTemp:
             test = 0
             where1 = "\"VALUE\" < %d" % test
@@ -1767,7 +1845,7 @@ elif prodSituation == "PS5":
                 rt = rt + 1
                 ty = str(rt)
                 name = "out23_" + ty
-                out23.save(path + name)
+                out23.save(output_dir / name)
             else:
                 out1 = arcpy.sa.Minus(raster, TBASE)
                 out6 = arcpy.sa.Con(out1, 0, out1, where1)
@@ -1776,13 +1854,13 @@ elif prodSituation == "PS5":
                 ty = str(rt)
                 name = "out23_" + ty
                 name1 = "sumtr"
-                out23.save(path + name)
+                out23.save(output_dir / name)
 
         out22 = 0.785 * out4
-        out22.save(path + "tshock")
+        out22.save(output_dir / "tshock")
 
         out2 = out23 - out22
-        out2.save(path + name1)
+        out2.save(output_dir / name1)
 
 
     #calculating sum of temp above TBASE
@@ -1795,8 +1873,8 @@ elif prodSituation == "PS5":
         #calculating sum of temperature
         bn = i + 15
         ft = str(bn)
-        arcpy.AddMessage("SIMULATION AT " + ft + " DACE")
-        arcpy.AddMessage("  Calculating Sum of Temperature above TBASE")
+        logging.info("SIMULATION AT " + ft + " DACE")
+        logging.info("  Calculating Sum of Temperature above TBASE")
         if i == 0:
             out4 = arcpy.sa.Minus(temp, TBASE)
             out5 = arcpy.sa.Con(out4, 0, out4, where1)
@@ -1804,7 +1882,7 @@ elif prodSituation == "PS5":
             i = i + 1
             ty = str(i)
             name = "sumt" + ty
-            co_sumt.save(path + name)
+            co_sumt.save(output_dir / name)
         else:
             DTemp = arcpy.sa.Minus(temp, TBASE)
             DTemp1 = arcpy.sa.Con(DTemp, 0, DTemp, where1)
@@ -1812,10 +1890,10 @@ elif prodSituation == "PS5":
             i = i + 1
             ty = str(i)
             name = "sumt" + ty
-            co_sumt.save(path + name)
+            co_sumt.save(output_dir / name)
 
         def sla():
-            arcpy.AddMessage("  Calculating Specific Leaf Area")
+            logging.info("  Calculating Specific Leaf Area")
             #calculating SLA
             #always add 1 to the value of sumt**
             #hence sumt007 with value of 0.07 becomes 1.07 in the equation
@@ -1866,7 +1944,7 @@ elif prodSituation == "PS5":
             blbrf = arcpy.sa.Minus(oneRaster, blight)
 
         elif analysisType == "Actual Yield":
-            arcpy.AddMessage("  Calculating Reduction factor for BLIGHT")
+            logging.info("  Calculating Reduction factor for BLIGHT")
             for blight in BlightGDB:
                 blightDate = blight[7:]
                 if tempDate == blightDate:
@@ -1882,7 +1960,7 @@ elif prodSituation == "PS5":
             rlbrf = arcpy.sa.Minus(oneRaster, blast)
 
         elif analysisType == "Actual Yield":
-            arcpy.AddMessage("  Calculating Reduction factor for BLAST")
+            logging.info("  Calculating Reduction factor for BLAST")
             for blast in BlastGDB:
                 blastDate = blast[6:]
                 if tempDate == blastDate:
@@ -1924,7 +2002,7 @@ elif prodSituation == "PS5":
 
         #Calculating LAI after treatment with Sheath Blight + Brown Spot + Bacterial leaf Blight
         def LAI ():
-            arcpy.AddMessage("  Calculating Leaf Area Index")
+            logging.info("  Calculating Leaf Area Index")
             thisSLA = sla()
             this_shb1 = SHB()
             this_shbrf = this_shb1[1]
@@ -1951,7 +2029,7 @@ elif prodSituation == "PS5":
 
         #Calculating the Rate of Growth and the Pool of assimilates
         def POOL (k=-0.6):
-            arcpy.AddMessage("  Calculating Pool of assimilates")
+            logging.info("  Calculating Pool of assimilates")
             where1 = "VALUE <= 0.9"
             RUE = arcpy.sa.Con(co_sumt, 1.2, 1.1, where1)
             this_LAI = LAI()
@@ -1967,11 +2045,11 @@ elif prodSituation == "PS5":
             #mRG = arcpy.sa.Times(RG, Days)
             ty = str(i)
             name = "pool" + ty
-            RG.save(path + name)
+            RG.save(output_dir / name)
             return RG
 
 
-        arcpy.AddMessage("  Calculating coefficients of partitioning")
+        logging.info("  Calculating coefficients of partitioning")
         #Calculating the coefficient of partitioning of leaves relative to DVS
         def COPARTL ():
             sumt00 = (-435 * (1**2))+(2755 * 1)-2320
@@ -2012,7 +2090,7 @@ elif prodSituation == "PS5":
         this_POOL = POOL()
 
         def PART ():
-            arcpy.AddMessage("  Calculating partitioning of assimilates")
+            logging.info("  Calculating partitioning of assimilates")
             #Calculate the partitioning of assimilates to leaves
             this_copartr = COPARTR()
             this = arcpy.sa.Minus(1, this_copartr)
@@ -2034,7 +2112,7 @@ elif prodSituation == "PS5":
 
         #Redistribution of reserves accumulated in the stems
         def RDIST():
-            arcpy.AddMessage("  Calculating the redistribution of reserves accumulated in the stems")
+            logging.info("  Calculating the redistribution of reserves accumulated in the stems")
             sumt1 = (-435 * (2**2))+(2755 * 2)-2320
             where1 = "\"VALUE\" < %d" % sumt1
             rdist = arcpy.sa.Con(co_sumt, 0, 4.42, where1)
@@ -2042,7 +2120,7 @@ elif prodSituation == "PS5":
 
         #Calculating the relative rate of senescence
         def RRSENL ():
-            arcpy.AddMessage("  Calculating the relative rate of senescence")
+            logging.info("  Calculating the relative rate of senescence")
             #sumt107 = (-425 * (2.07**2))+(2550 * 2.07)-2125
             sumt13 = (-435 * (2.3**2))+(2755 * 2.3)-2320
             #sumt163 = (-425 * (2.63**2))+(2550 * 2.63)-2125
@@ -2063,7 +2141,7 @@ elif prodSituation == "PS5":
         this_shb = SHB()
         this_trshbl = this_shb[0]
 
-        arcpy.AddMessage("  Calculating the dry weight of organs\n")
+        logging.info("  Calculating the dry weight of organs\n")
 
         #Calculate the increase in dry weight for panicles
         ppanw1 = arcpy.sa.Plus(this_rdist, this_partp)
@@ -2097,7 +2175,7 @@ elif prodSituation == "PS5":
             thisLEAFW = arcpy.sa.Plus(LEAFW, pleafw2)
             ty = str(i)
             name = "leafw" + ty
-            thisLEAFW.save(path + name)
+            thisLEAFW.save(output_dir / name)
         else:
             thisPANW = thisPANW + ppanw3
             thisSTEMW = thisSTEMW + pstemw
@@ -2105,11 +2183,11 @@ elif prodSituation == "PS5":
             thisLEAFW = thisLEAFW + pleafw2
             ty = str(i)
             name = "leafw" + ty
-            thisLEAFW.save(path + name)
+            thisLEAFW.save(output_dir / name)
 
-    output =  path1 + "Yield_PS5"
+    output =  yields_dir + "Yield_PS5"
     thisPANW.save(output)
-    arcpy.AddMessage("COMPLETED")
+    logging.info("COMPLETED")
 
 
 elif prodSituation == "PS6":
@@ -2126,7 +2204,7 @@ elif prodSituation == "PS6":
 
     #check if rice variety is direct seeded or transplanted.
     if cropEst == "Direct Seeded":
-        arcpy.AddMessage("Calculating Sum of Initial Temperature for Direct Seeded Systems")
+        logging.info("Calculating Sum of Initial Temperature for Direct Seeded Systems")
         for raster in IniTemp:
             test = 0
             where1 = "\"VALUE\" < %d" % test
@@ -2136,7 +2214,7 @@ elif prodSituation == "PS6":
                 rt = rt + 1
                 ty = str(rt)
                 name = "out2_" + ty
-                out2.save(path + name)
+                out2.save(output_dir / name)
             else:
                 out1 = arcpy.sa.Minus(raster, TBASE)
                 out6 = arcpy.sa.Con(out1, 0, out1, where1)
@@ -2144,9 +2222,9 @@ elif prodSituation == "PS6":
                 rt = rt + 1
                 ty = str(rt)
                 name = "out2_" + ty
-                out2.save(path + name)
+                out2.save(output_dir / name)
     elif cropEst == "Transplanted":
-        arcpy.AddMessage("Calculating Sum of Initial Temperature for Transplanted Systems\n")
+        logging.info("Calculating Sum of Initial Temperature for Transplanted Systems\n")
         for raster in IniTemp:
             test = 0
             where1 = "\"VALUE\" < %d" % test
@@ -2177,7 +2255,7 @@ elif prodSituation == "PS6":
                 rt = rt + 1
                 ty = str(rt)
                 name = "out23_" + ty
-                out23.save(path + name)
+                out23.save(output_dir / name)
             else:
                 out1 = arcpy.sa.Minus(raster, TBASE)
                 out6 = arcpy.sa.Con(out1, 0, out1, where1)
@@ -2186,13 +2264,13 @@ elif prodSituation == "PS6":
                 ty = str(rt)
                 name = "out23_" + ty
                 name1 = "sumtr"
-                out23.save(path + name)
+                out23.save(output_dir / name)
 
         out22 = 0.785 * out4
-        out22.save(path + "tshock")
+        out22.save(output_dir / "tshock")
 
         out2 = out23 - out22
-        out2.save(path + name1)
+        out2.save(output_dir / name1)
 
 
     #calculating sum of temp above TBASE
@@ -2205,8 +2283,8 @@ elif prodSituation == "PS6":
         #calculating sum of temperature
         bn = i + 15
         ft = str(bn)
-        arcpy.AddMessage("SIMULATION AT " + ft + " DACE")
-        arcpy.AddMessage("  Calculating Sum of Temperature above TBASE")
+        logging.info("SIMULATION AT " + ft + " DACE")
+        logging.info("  Calculating Sum of Temperature above TBASE")
         if i == 0:
             out4 = arcpy.sa.Minus(temp, TBASE)
             out5 = arcpy.sa.Con(out4, 0, out4, where1)
@@ -2214,7 +2292,7 @@ elif prodSituation == "PS6":
             i = i + 1
             ty = str(i)
             name = "sumt" + ty
-            co_sumt.save(path + name)
+            co_sumt.save(output_dir / name)
         else:
             DTemp = arcpy.sa.Minus(temp, TBASE)
             DTemp1 = arcpy.sa.Con(DTemp, 0, DTemp, where1)
@@ -2222,10 +2300,10 @@ elif prodSituation == "PS6":
             i = i + 1
             ty = str(i)
             name = "sumt" + ty
-            co_sumt.save(path + name)
+            co_sumt.save(output_dir / name)
 
         def sla():
-            arcpy.AddMessage("  Calculating Specific Leaf Area")
+            logging.info("  Calculating Specific Leaf Area")
             #calculating SLA
             #always add 1 to the value of sumt**
             #hence sumt007 with value of 0.07 becomes 1.07 in the equation
@@ -2277,7 +2355,7 @@ elif prodSituation == "PS6":
             blbrf = arcpy.sa.Minus(oneRaster, blight)
 
         elif analysisType == "Actual Yield":
-            arcpy.AddMessage("  Calculating Reduction factor for BLIGHT")
+            logging.info("  Calculating Reduction factor for BLIGHT")
             for blight in BlightGDB:
                 blightDate = blight[7:]
                 if tempDate == blightDate:
@@ -2293,7 +2371,7 @@ elif prodSituation == "PS6":
             rlbrf = arcpy.sa.Minus(oneRaster, blast)
 
         elif analysisType == "Actual Yield":
-            arcpy.AddMessage("  Calculating Reduction factor for BLAST")
+            logging.info("  Calculating Reduction factor for BLAST")
             for blast in BlastGDB:
                 blastDate = blast[6:]
                 if tempDate == blastDate:
@@ -2336,7 +2414,7 @@ elif prodSituation == "PS6":
 
         #Calculating LAI after treatment with Sheath Blight + Brown Spot + Bacterial leaf Blight
         def LAI ():
-            arcpy.AddMessage("  Calculating Leaf Area Index")
+            logging.info("  Calculating Leaf Area Index")
             thisSLA = sla()
             this_shb1 = SHB()
             this_shbrf = this_shb1[1]
@@ -2363,7 +2441,7 @@ elif prodSituation == "PS6":
 
         #Calculating the Rate of Growth and the Pool of assimilates
         def POOL (k=-0.6):
-            arcpy.AddMessage("  Calculating Pool of assimilates")
+            logging.info("  Calculating Pool of assimilates")
             where1 = "VALUE <= 0.9"
             RUE = arcpy.sa.Con(co_sumt, 1.3, 1.2, where1)
             this_LAI = LAI()
@@ -2379,11 +2457,11 @@ elif prodSituation == "PS6":
             #mRG = arcpy.sa.Times(RG, Days)
             ty = str(i)
             name = "pool" + ty
-            RG.save(path + name)
+            RG.save(output_dir / name)
             return RG
 
 
-        arcpy.AddMessage("  Calculating coefficients of partitioning")
+        logging.info("  Calculating coefficients of partitioning")
         #Calculating the coefficient of partitioning of leaves relative to DVS
         def COPARTL ():
             sumt00 = (-435 * (1**2))+(2755 * 1)-2320
@@ -2424,7 +2502,7 @@ elif prodSituation == "PS6":
         this_POOL = POOL()
 
         def PART ():
-            arcpy.AddMessage("  Calculating partitioning of assimilates")
+            logging.info("  Calculating partitioning of assimilates")
             #Calculate the partitioning of assimilates to leaves
             this_copartr = COPARTR()
             this = arcpy.sa.Minus(1, this_copartr)
@@ -2446,7 +2524,7 @@ elif prodSituation == "PS6":
 
         #Redistribution of reserves accumulated in the stems
         def RDIST():
-            arcpy.AddMessage("  Calculating the redistribution of reserves accumulated in the stems")
+            logging.info("  Calculating the redistribution of reserves accumulated in the stems")
             sumt1 = (-435 * (2**2))+(2755 * 2)-2320
             where1 = "\"VALUE\" < %d" % sumt1
             rdist = arcpy.sa.Con(co_sumt, 0, 4.42, where1)
@@ -2454,7 +2532,7 @@ elif prodSituation == "PS6":
 
         #Calculating the relative rate of senescence
         def RRSENL ():
-            arcpy.AddMessage("  Calculating the relative rate of senescence")
+            logging.info("  Calculating the relative rate of senescence")
             #sumt107 = (-425 * (2.07**2))+(2550 * 2.07)-2125
             sumt13 = (-435 * (2.3**2))+(2755 * 2.3)-2320
             #sumt163 = (-425 * (2.63**2))+(2550 * 2.63)-2125
@@ -2476,7 +2554,7 @@ elif prodSituation == "PS6":
         this_shb = SHB()
         this_trshbl = this_shb[0]
 
-        arcpy.AddMessage("  Calculating the dry weight of organs\n")
+        logging.info("  Calculating the dry weight of organs\n")
         #Calculate the increase in dry weight for panicles
         ppanw1 = arcpy.sa.Plus(this_rdist, this_partp)
 
@@ -2510,7 +2588,7 @@ elif prodSituation == "PS6":
             thisLEAFW = arcpy.sa.Plus(LEAFW, pleafw2)
             ty = str(i)
             name = "leafw" + ty
-            thisLEAFW.save(path + name)
+            thisLEAFW.save(output_dir / name)
         else:
             thisPANW = thisPANW + ppanw3
             thisSTEMW = thisSTEMW + pstemw
@@ -2518,8 +2596,8 @@ elif prodSituation == "PS6":
             thisLEAFW = thisLEAFW + pleafw2
             ty = str(i)
             name = "leafw" + ty
-            thisLEAFW.save(path + name)
+            thisLEAFW.save(output_dir / name)
 
-    output =  path1 + "Yield_PS6"
+    output =  yields_dir + "Yield_PS6"
     thisPANW.save(output)
-    arcpy.AddMessage("COMPLETED")
+    logging.info("COMPLETED")
