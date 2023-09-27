@@ -549,17 +549,21 @@ elif prodSituation == "PS2":
         logging.info("Calculating Sum of Initial Temperature for Direct Seeded Systems")
         for raster in IniTemp:
             test = 0
-            where1 = "\"VALUE\" < %d" % test
+            # where1 = "\"VALUE\" < %d" % test
             if rt == 0:
-                out3 = arcpy.sa.Minus(raster, TBASE)
-                out2 = arcpy.sa.Con(out3, 0, out3, where1)
+                # out3 = arcpy.sa.Minus(raster, TBASE)
+                out3 = raster - TBASE
+                # out2 = arcpy.sa.Con(out3, 0, out3, "\"VALUE\" < %d" % test)
+                out2 = np.where(out3 < test, out3, 0)
                 rt = rt + 1
                 ty = str(rt)
                 name = "out2_" + ty
                 out2.save(output_dir / name)
             else:
-                out1 = arcpy.sa.Minus(raster, TBASE)
-                out6 = arcpy.sa.Con(out1, 0, out1, where1)
+                # out1 = arcpy.sa.Minus(raster, TBASE)
+                out1 = raster - TBASE
+                # out6 = arcpy.sa.Con(out1, 0, out1, where1)
+                out6 = np.where(out1 < test, out1, 0)
                 out2 = out2 + out6
                 rt = rt + 1
                 ty = str(rt)
