@@ -6,6 +6,7 @@
 
 #ORIGINAL VERSION of RICEPEST WITH UNMODIFIED PS3
 
+from termios import VMIN
 import rasterio
 from rasterio.plot import show
 from rasterio.enums import Resampling
@@ -35,6 +36,8 @@ PathName = Path.cwd()
 #Setting environment variables;
 output_dir = PathName / "Output"
 yields_dir = PathName / "Yields"
+# output_dir.mkdir()
+# yields_dir.mkdir()
 
 #analysisType = sys.argv[4]
 analysisType = "Actual Yield"
@@ -87,7 +90,8 @@ def find_min_raster_resolution(raster_paths:list):
             res.append(src.res[0])
     return min(res)    
 
-def get_min_intersecting_bounds(raster_paths):
+def get_min_intersecting_bounds(raster_paths)->[float,float,float,float]:
+    """ returns the minimum bounds that intersect all rasters -> [left, bottom, right, top] """
     boundss = []
     for path in raster_paths:
         with rasterio.open(path) as src:
@@ -97,21 +101,66 @@ def get_min_intersecting_bounds(raster_paths):
     intersecting_bounds = (mx[0], mx[1], mn[2], mn[3])
     return intersecting_bounds
 
-def read_raster_using_bounds(raster_path:Path, bounds:[float,float,float,float] , resampling=Resampling.nearest)->np.ndarray:
-    """read a rasterio window from a raster, with non-matching profile. output tile matches location and size of input window"""
+def read_raster_using_bounds(raster_path:Path, 
+                            bounds:[float,float,float,float], 
+                            pixel_size:float,
+                            resampling=Resampling.nearest)->np.ndarray:
+    """
+    read a rasterio window from a raster, with non-matching profile.
+    read window is created from the geographic bounds and pixel size.
+    """
     with rasterio.open(raster_path) as src:
-
-        raster_window = rasterio.windows.from_bounds(*bounds, src.transform)
-        img = src.read(window=raster_window, boundless=True, out_shape=(src.count, int(raster_window.height), int(raster_window.width)), resampling=resampling)
+        xmin, ymin, xmax, ymax = bounds
+        transform = rasterio.transform.from_origin(xmin, ymax, pixel_size, pixel_size)
+        raster_window = rasterio.windows.from_bounds(*bounds, transform)
+        img = src.read(window=raster_window, 
+                       boundless=False,         
+                       resampling=resampling,
+                       masked=True
+                       
+                       )
     return img
 
+def write_raster_with_updated_profile(img, bounds, pixel_size, out_path, nodata=0):
+    """
+    save the raster with the updated profile
+    profile updated to change the bounds and pixel size to match resampled data. 
+    CRS is added, hard coded as WGS84
+    raster saved in COG format: https://github.com/cogeotiff/rio-cogeo/blob/main/rio_cogeo/profiles.py
+    """
+    xmin, ymin, xmax, ymax = bounds
+    transform = rasterio.transform.from_origin(xmin, ymax, pixel_size, pixel_size)
+    profile = {
+                "driver": "GTiff",
+                "interleave": "pixel",
+                "tiled": True,
+                "blockxsize": 512,
+                "blockysize": 512,
+                "compress": "LZW",
+                "width": img.shape[2],
+                "height": img.shape[1],
+                "count": img.shape[0],
+                "dtype": img.dtype,
+                "nodata": nodata,
+                "transform": transform,
+                "crs": "EPSG:4326"
+                }
+    with rasterio.open(out_path, "w", **profile) as dst:
+        dst.write(img)
+
+# ? how to handle nodata values?
+# ? are nodata values set correctly? seem to be -9999.0, but metadata says {'nodata': -3.3999999521443642e+38}
 
 raster_path = raster_paths[0]
 assert check_raster_crs_all_equal(all_rasters), "all rasters must be in the same CRS, reproject before proceeding"
-res = find_min_raster_resolution(raster_paths)
+pixel_size = find_min_raster_resolution(raster_paths)
 bounds = get_min_intersecting_bounds(raster_paths)
-img = read_raster_using_bounds(raster_path, bounds , resampling=Resampling.nearest)
-show(img)
+img = read_raster_using_bounds(raster_path, bounds, res, resampling=Resampling.nearest)
+show(img, vmin=0)
+img.min()
+rasterio.open(raster_path).profile
+
+
 
 
 
@@ -141,7 +190,8 @@ if prodSituation == "PS1":
             where1 = "\"VALUE\" < %d" % test
             if rt == 0:
                 out3 = arcpy.sa.Minus(raster, TBASE)
-                out2 = arcpy.sa.Con(out3, 0, out3, where1)
+                # out2 = arcpy.sa.Con(out3, 0, out3, where1)
+                out2 = np.where(out3 < test, out3, 0)
                 rt = rt + 1
                 ty = str(rt)
                 name = "out2_" + ty
@@ -162,7 +212,8 @@ if prodSituation == "PS1":
             if jt == 0:
                 if kt != TransplantDays:
                     out3 = arcpy.sa.Minus(raster, TBASE)
-                    out4 = arcpy.sa.Con(out3, 0, out3, where1)
+                    # out4 = arcpy.sa.Con(out3, 0, out3, where1)
+                    out4 = np.where(out3 < test, out3, 0)
                     jt = jt + 1
                     kt = kt + 1
                 else:
@@ -182,7 +233,8 @@ if prodSituation == "PS1":
             where1 = "\"VALUE\" < %d" % test
             if rt == 0:
                 out3 = arcpy.sa.Minus(raster, TBASE)
-                out23 = arcpy.sa.Con(out3, 0, out3, where1)
+                # out23 = arcpy.sa.Con(out3, 0, out3, where1)
+                out23 = np.where(out3 < test, out3, 0)
                 rt = rt + 1
                 ty = str(rt)
                 name = "out23_" + ty
@@ -558,7 +610,8 @@ elif prodSituation == "PS2":
                 rt = rt + 1
                 ty = str(rt)
                 name = "out2_" + ty
-                out2.save(output_dir / name)
+                # out2.save(output_dir / name)
+                write_raster_with_updated_profile(out2, bounds, pixel_size, out_path=output_dir/name, nodata=0)
             else:
                 # out1 = arcpy.sa.Minus(raster, TBASE)
                 out1 = raster - TBASE
@@ -568,16 +621,18 @@ elif prodSituation == "PS2":
                 rt = rt + 1
                 ty = str(rt)
                 name = "out2_" + ty
-                out2.save(output_dir / name)
+                # out2.save(output_dir / name)
+                write_raster_with_updated_profile(out2, bounds, pixel_size, out_path=output_dir/name, nodata=0)
     elif cropEst == "Transplanted":
         logging.info("Calculating Sum of Initial Temperature for Transplanted Systems\n")
         for raster in IniTemp:
             test = 0
-            where1 = "\"VALUE\" < %d" % test
+            # where1 = "\"VALUE\" < %d" % test
             if jt == 0:
                 if kt != TransplantDays:
                     out3 = arcpy.sa.Minus(raster, TBASE)
-                    out4 = arcpy.sa.Con(out3, 0, out3, where1)
+                    # out4 = arcpy.sa.Con(out3, 0, out3, where1)
+                    out4 = np.where(out3 < test, out3, 0)
                     jt = jt + 1
                     kt = kt + 1
                 else:
@@ -597,7 +652,8 @@ elif prodSituation == "PS2":
             where1 = "\"VALUE\" < %d" % test
             if rt == 0:
                 out3 = arcpy.sa.Minus(raster, TBASE)
-                out23 = arcpy.sa.Con(out3, 0, out3, where1)
+                # out23 = arcpy.sa.Con(out3, 0, out3, where1)
+                out23 = np.where(out3 < test, out3, 0)
                 rt = rt + 1
                 ty = str(rt)
                 name = "out23_" + ty
@@ -968,7 +1024,8 @@ elif prodSituation == "PS3":
             where1 = "\"VALUE\" < %d" % test
             if rt == 0:
                 out3 = arcpy.sa.Minus(raster, TBASE)
-                out2 = arcpy.sa.Con(out3, 0, out3, where1)
+                # out2 = arcpy.sa.Con(out3, 0, out3, where1)
+                out2 = np.where(out3 < test, out3, 0)
                 rt = rt + 1
                 ty = str(rt)
                 name = "out2_" + ty
@@ -989,7 +1046,8 @@ elif prodSituation == "PS3":
             if jt == 0:
                 if kt != TransplantDays:
                     out3 = arcpy.sa.Minus(raster, TBASE)
-                    out4 = arcpy.sa.Con(out3, 0, out3, where1)
+                    # out4 = arcpy.sa.Con(out3, 0, out3, where1)
+                    out4 = np.where(out3 < test, out3, 0)
                     jt = jt + 1
                     kt = kt + 1
                 else:
@@ -1009,7 +1067,8 @@ elif prodSituation == "PS3":
             where1 = "\"VALUE\" < %d" % test
             if rt == 0:
                 out3 = arcpy.sa.Minus(raster, TBASE)
-                out23 = arcpy.sa.Con(out3, 0, out3, where1)
+                # out23 = arcpy.sa.Con(out3, 0, out3, where1)
+                out23 = np.where(out3 < test, out3, 0)
                 rt = rt + 1
                 ty = str(rt)
                 name = "out23_" + ty
@@ -1396,7 +1455,8 @@ elif prodSituation == "PS4":
             raster = arcpy.sa.Times(raster, 1)
             if rt == 0:
                 out3 = arcpy.sa.Minus(raster, 8)
-                out2 = arcpy.sa.Con(out3, 0, out3, where1)
+                # out2 = arcpy.sa.Con(out3, 0, out3, where1)
+                out2 = np.where(out3 < test, out3, 0)
                 rt = rt + 1
                 ty = str(rt)
                 name = "out2_" + ty
@@ -1417,7 +1477,8 @@ elif prodSituation == "PS4":
             if jt == 0:
                 if kt != TransplantDays:
                     out3 = arcpy.sa.Minus(raster, TBASE)
-                    out4 = arcpy.sa.Con(out3, 0, out3, where1)
+                    # out4 = arcpy.sa.Con(out3, 0, out3, where1)
+                    out4 = np.where(out3 < test, out3, 0)
                     jt = jt + 1
                     kt = kt + 1
                 else:
@@ -1437,7 +1498,8 @@ elif prodSituation == "PS4":
             where1 = "\"VALUE\" < %d" % test
             if rt == 0:
                 out3 = arcpy.sa.Minus(raster, TBASE)
-                out23 = arcpy.sa.Con(out3, 0, out3, where1)
+                # out23 = arcpy.sa.Con(out3, 0, out3, where1)
+                out23 = np.where(out3 < test, out3, 0)
                 rt = rt + 1
                 ty = str(rt)
                 name = "out23_" + ty
@@ -1804,7 +1866,8 @@ elif prodSituation == "PS5":
             where1 = "\"VALUE\" < %d" % test
             if rt == 0:
                 out3 = arcpy.sa.Minus(raster, TBASE)
-                out2 = arcpy.sa.Con(out3, 0, out3, where1)
+                # out2 = arcpy.sa.Con(out3, 0, out3, where1)
+                out2 = np.where(out3 < test, out3, 0)
                 rt = rt + 1
                 ty = str(rt)
                 name = "out2_" + ty
@@ -1825,7 +1888,8 @@ elif prodSituation == "PS5":
             if jt == 0:
                 if kt != TransplantDays:
                     out3 = arcpy.sa.Minus(raster, TBASE)
-                    out4 = arcpy.sa.Con(out3, 0, out3, where1)
+                    # out4 = arcpy.sa.Con(out3, 0, out3, where1)
+                    out4 = np.where(out3 < test, out3, 0)
                     jt = jt + 1
                     kt = kt + 1
                 else:
@@ -1845,7 +1909,8 @@ elif prodSituation == "PS5":
             where1 = "\"VALUE\" < %d" % test
             if rt == 0:
                 out3 = arcpy.sa.Minus(raster, TBASE)
-                out23 = arcpy.sa.Con(out3, 0, out3, where1)
+                # out23 = arcpy.sa.Con(out3, 0, out3, where1)
+                out23 = np.where(out3 < test, out3, 0)
                 rt = rt + 1
                 ty = str(rt)
                 name = "out23_" + ty
@@ -2214,7 +2279,8 @@ elif prodSituation == "PS6":
             where1 = "\"VALUE\" < %d" % test
             if rt == 0:
                 out3 = arcpy.sa.Minus(raster, TBASE)
-                out2 = arcpy.sa.Con(out3, 0, out3, where1)
+                # out2 = arcpy.sa.Con(out3, 0, out3, where1)
+                out2 = np.where(out3 < test, out3, 0)
                 rt = rt + 1
                 ty = str(rt)
                 name = "out2_" + ty
@@ -2235,7 +2301,8 @@ elif prodSituation == "PS6":
             if jt == 0:
                 if kt != TransplantDays:
                     out3 = arcpy.sa.Minus(raster, TBASE)
-                    out4 = arcpy.sa.Con(out3, 0, out3, where1)
+                    # out4 = arcpy.sa.Con(out3, 0, out3, where1)
+                    out4 = np.where(out3 < test, out3, 0)
                     jt = jt + 1
                     kt = kt + 1
                 else:
@@ -2255,7 +2322,8 @@ elif prodSituation == "PS6":
             where1 = "\"VALUE\" < %d" % test
             if rt == 0:
                 out3 = arcpy.sa.Minus(raster, TBASE)
-                out23 = arcpy.sa.Con(out3, 0, out3, where1)
+                # out23 = arcpy.sa.Con(out3, 0, out3, where1)
+                out23 = np.where(out3 < test, out3, 0)
                 rt = rt + 1
                 ty = str(rt)
                 name = "out23_" + ty
