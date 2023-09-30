@@ -31,13 +31,10 @@ import os
 from pathlib import Path
 logging.basicConfig(level=logging.INFO)
 
-
-
 logging.info("              NAME:             RICEPEST Spatial Model")
 logging.info("              DEVELOPED BY:     Confidence Duku (AfricaRice), Adam Sparks (IRRI) and Sander Zwart (AfricaRice)")
 logging.info("              BASED ON WORK BY: Laetitia Willocquet and Serge Savary (IRRI)")
-logging.info("              REQUIREMENTS:     ArcGIS Spatial Analyst Extension")
-
+logging.info("              REQUIREMENTS:     tested on rasterio.__version__ '1.3.8' ")
 
 logging.info("\nSetting Environment Variables")
 
@@ -75,8 +72,8 @@ data_dir = PathName / "Data"
 
 # get raster paths
 RadGDB = list(data_dir.rglob("rad*"))
-RadGDB = [path for path in RadGDB if path.is_dir()]
 TempGDB = list(data_dir.rglob("tmean*"))
+RadGDB = [path for path in RadGDB if path.is_dir()]
 TempGDB = [path for path in TempGDB if path.is_dir()]
 IniTemp = list(data_dir.rglob("i*"))
 IniTemp = [path for path in IniTemp if path.is_dir()]
@@ -179,15 +176,24 @@ save_raster = partial(write_raster_with_updated_profile, bounds=BOUNDS, pixel_si
 # img.min()
 # rasterio.open(raster_path).profile
 
+def lazy_load_rasters(raster_paths:list)->np.ndarray:
+    for raster_path in raster_paths:
+        img = read_raster_using_bounds(raster_path, 
+                            BOUNDS, 
+                            PIXEL_SIZE,
+                            resampling=Resampling.nearest)
+        yield img
+
+TempGDB = lazy_load_rasters(TempGDB)
+RadGDB = lazy_load_rasters(RadGDB)
+IniTemp = lazy_load_rasters(IniTemp)
+BlastGDB = lazy_load_rasters(BlastGDB)
+BlightGDB = lazy_load_rasters(BlightGDB)
 
 
-
-
-# check as crs are equal
-# find the intersection of the raster bounds
-# find the smallest pixel size
 #########################################
 ### Example given for PS2 only...
+# TODO: Read in the raster files...
 
 if prodSituation == "PS2":
     PANW = 0
@@ -241,7 +247,7 @@ if prodSituation == "PS2":
                     kt = kt + 1
                 else:
                     break
-
+# does this need as else:?
         for raster in IniTemp:
             test = 0
             if rt == 0:
