@@ -1,3 +1,16 @@
+"""
+Rasterio translation of the original ricepest.py script.
+
+NOTES:
+    arcpy.sa.Con is equivalent to np.where:
+        where1 = "\"VALUE\" < %d" % test
+        out2 = arcpy.sa.Con(out3, 0, out3, where1)
+
+        ==>  out2 = np.where(out3 < test, out3, 0)
+
+"""
+
+
 #NAME: RICEPEST Spatial Model
 #DESCRIPTION: Generic RICEPEST tool for calculating attainable and actual yields based on supplied parameters
 #REQUIREMENTS: ArcGIS Spatial Analyst Extension
@@ -6,6 +19,7 @@
 
 #ORIGINAL VERSION of RICEPEST WITH UNMODIFIED PS3
 
+from functools import partial
 from termios import VMIN
 import rasterio
 from rasterio.plot import show
@@ -132,7 +146,7 @@ def write_raster_with_updated_profile(img:np.ndarray,
     CRS is added, hard coded as WGS84
     raster saved in COG format: https://github.com/cogeotiff/rio-cogeo/blob/main/rio_cogeo/profiles.py
     """
-    xmin, ymin, xmax, ymax = bounds
+    xmin, _, _, ymax = bounds
     transform = rasterio.transform.from_origin(xmin, ymax, pixel_size, pixel_size)
     profile = {
                 "driver": "GTiff",
@@ -159,6 +173,7 @@ raster_path = raster_paths[0]
 assert check_raster_crs_all_equal(all_rasters), "all rasters must be in the same CRS, reproject before proceeding"
 PIXEL_SIZE = find_min_raster_resolution(raster_paths)
 BOUNDS = get_min_intersecting_bounds(raster_paths)
+save_raster = partial(write_raster_with_updated_profile, bounds=BOUNDS, pixel_size=PIXEL_SIZE, out_path=output_dir)
 # img = read_raster_using_bounds(raster_path, BOUNDS, PIXEL_SIZE, resampling=Resampling.nearest)
 # show(img, vmin=0)
 # img.min()
@@ -259,7 +274,7 @@ if prodSituation == "PS2":
         write_raster_with_updated_profile(out2, BOUNDS, PIXEL_SIZE, out_path=output_dir/name1)
 
 
-    #calculating sum of temp above TBASE
+    logging.info("--- calculating sum of temp above TBASE ----------------")
 
     i = 0
     for temp in TempGDB:
@@ -273,66 +288,71 @@ if prodSituation == "PS2":
         logging.info("  Calculating Sum of Temperature above TBASE")
         if i == 0:
             out4 = np.subtract(temp, TBASE)
-            out5 = arcpy.sa.Con(out4, 0, out4, where1)
+            # out5 = arcpy.sa.Con(out4, 0, out4, where1)
+            out5 = np.where(out4<test, out4, 0)
             co_sumt = out5 + out2
             i = i + 1
             ty = str(i)
             name = "sumt" + ty
-            co_sumt.save(output_dir / name)
+            save_raster(img=co_sumt, out_path=output_dir / name)
         else:
             DTemp = np.subtract(temp, TBASE)
-            DTemp1 = arcpy.sa.Con(DTemp, 0, DTemp, where1)
+            # DTemp1 = arcpy.sa.Con(DTemp, 0, DTemp, where1)
+            DTemp1 = np.where(DTemp<test, DTemp, 0)
             co_sumt = DTemp1 + co_sumt
             i = i + 1
             ty = str(i)
             name = "sumt" + ty
-            co_sumt.save(output_dir / name)
+            save_raster(img=co_sumt, out_path=output_dir / name)
 
         def sla():
+            #! parameterize co_sumt
             logging.info("  Calculating Specific Leaf Area")
             #calculating SLA
             #always add 1 to the value of sumt**
             #hence sumt007 with value of 0.07 becomes 1.07 in the equation
             sumt0 = (-435 * (1**2))+(2755 * 1)-2320
             sumt05 = (-435 * (1.5**2))+(2755 * 1.5)-2320
-            sumt1 = (-435 * (2**2))+(2755 * 2)-2320
-            sumt2 = (-435 * (3**2))+(2755 * 3)-2320
-            where0 = "\"VALUE\" <= %d" % sumt0
-            where05 = "\"VALUE\" <= %d" % sumt05
-            where1 = "\"VALUE\" <= %d" % sumt1
-            where2 = "\"VALUE\" <= %d" % sumt2
-            SLA = arcpy.sa.Con(co_sumt, 0.037, (arcpy.sa.Con(co_sumt, 0.03, 0.017, where05)), where0)
-            arcpy.BuildPyramids_management(SLA)
+            # sumt1 = (-435 * (2**2))+(2755 * 2)-2320
+            # sumt2 = (-435 * (3**2))+(2755 * 3)-2320
+            # where0 = "\"VALUE\" <= %d" % sumt0
+            # where05 = "\"VALUE\" <= %d" % sumt05
+            # # where1 = "\"VALUE\" <= %d" % sumt1
+            # # where2 = "\"VALUE\" <= %d" % sumt2
+            _SLA = np.where(co_sumt<=sumt05, 0.017, 0.03)
+            SLA = np.where(co_sumt<=sumt0, _SLA, 0.037)
+            # arcpy.BuildPyramids_management(SLA)
+            #! I think arcpy.BuildPyramids_management is not needed, leaving without here
             return SLA
 
         mysevl = 0
         trysevl = co_sumt
-        oneRaster = arcpy.sa.Divide(trysevl, trysevl)
-        Sevl = arcpy.sa.Times(oneRaster, mysevl)
+        oneRaster = np.divide(trysevl, trysevl)
+        Sevl = np.multiply(oneRaster, mysevl)
 
         def SHB ():
             #The first Damage mechanism due to Sheath Blight
-            prshbl = arcpy.sa.Times(0.00076, Sevl)
+            prshbl = np.multiply(0.00076, Sevl)
             if i == 1:
-                rshbl = arcpy.sa.Times(prshbl, LEAFW)
+                rshbl = np.multiply(prshbl, LEAFW)
             else:
-                rshbl = arcpy.sa.Times(prshbl, thisLEAFW)
-            #trshbl = arcpy.sa.Times(rshbl, Days)
+                rshbl = np.multiply(prshbl, thisLEAFW)
+            #trshbl = np.multiply(rshbl, Days)
 
             #The second Damage mechanism due to Sheath Blight
-            pshbrf = arcpy.sa.Divide(Sevl, 100)
+            pshbrf = np.divide(Sevl, 100)
             shbrf = np.subtract(1, pshbrf)
             return [rshbl, shbrf]
 
 
         #Damage mechanism due to Brown Spot
         mybsdm = 0
-        bsdm = arcpy.sa.Times(oneRaster, mybsdm)
+        bsdm = np.multiply(oneRaster, mybsdm)
 
         def BS (beta=6.3):
-            pbsrf = arcpy.sa.Divide(bsdm, 100)
+            pbsrf = np.divide(bsdm, 100)
             pbsrf1 = np.subtract(1, pbsrf)
-            bsrf = arcpy.sa.Power(pbsrf1, beta)
+            bsrf = np.power(pbsrf1, beta)
             return bsrf
 
         #Damage mechanism due to Bacterial Leaf Blight
@@ -345,7 +365,7 @@ if prodSituation == "PS2":
             for blight in BlightGDB:
                 blightDate = blight[7:]
                 if tempDate == blightDate:
-                    pblbrf = arcpy.sa.Divide(blight, 100)
+                    pblbrf = np.divide(blight, 100)
                     blbrf = np.subtract(1, pblbrf)
                     break
             else:
@@ -361,38 +381,38 @@ if prodSituation == "PS2":
             for blast in BlastGDB:
                 blastDate = blast[6:]
                 if tempDate == blastDate:
-                    prlbrf = arcpy.sa.Divide(blast, 100)
+                    prlbrf = np.divide(blast, 100)
                     prlbrf2 = np.subtract(1, prlbrf)
-                    rlbrf = arcpy.sa.Power(prlbrf2, 3)
+                    rlbrf = np.power(prlbrf2, 3)
                     break
             else:
                 rlbrf = 1
 
         #Damage mechanism due to Sheath Rot
         myshrdm = 0
-        shrdm = arcpy.sa.Times(oneRaster, myshrdm)
+        shrdm = np.multiply(oneRaster, myshrdm)
 
         def SHR ():
             shrrf = np.subtract(1, shrdm)
-            #shrrf = arcpy.sa.Times(pshrrf, Days)
+            #shrrf = np.multiply(pshrrf, Days)
             return shrrf
 
         #Damage mechanism due to White Heads
         mywhdm = 0
-        whdm = arcpy.sa.Times(oneRaster, mywhdm)
+        whdm = np.multiply(oneRaster, mywhdm)
 
         def WH ():
             whrf = np.subtract(1, whdm)
-            #whrf = arcpy.sa.Times(pwhrf, Days)
+            #whrf = np.multiply(pwhrf, Days)
             return whrf
 
         #Damage mechanism due to Weeds
         myweeddm = 0
-        weeddm = arcpy.sa.Times(oneRaster, myweeddm)
+        weeddm = np.multiply(oneRaster, myweeddm)
 
         def WEEDS ():
-            prfwd = arcpy.sa.Times(weeddm, -0.003)
-            prfwd1 = arcpy.sa.Exp(prfwd)
+            prfwd = np.multiply(weeddm, -0.003)
+            prfwd1 = np.exp(prfwd)
             rfwd = np.subtract(1, prfwd1)
             weedrf = np.subtract(1, rfwd)
             return weedrf
@@ -406,14 +426,14 @@ if prodSituation == "PS2":
             this_bsrf = BS()
 
             if i == 1:
-                pLAI = arcpy.sa.Times(thisSLA, LEAFW)
+                pLAI = np.multiply(thisSLA, LEAFW)
             else:
-                pLAI = arcpy.sa.Times(thisSLA, thisLEAFW)
+                pLAI = np.multiply(thisSLA, thisLEAFW)
 
-            pLAI1 = arcpy.sa.Times(blbrf, pLAI)
-            pLAI2 = arcpy.sa.Times(rlbrf, pLAI1)
-            pLAI3 = arcpy.sa.Times(this_shbrf, pLAI2)
-            LAI = arcpy.sa.Times(this_bsrf, pLAI3)
+            pLAI1 = np.multiply(blbrf, pLAI)
+            pLAI2 = np.multiply(rlbrf, pLAI1)
+            pLAI3 = np.multiply(this_shbrf, pLAI2)
+            LAI = np.multiply(this_bsrf, pLAI3)
             return LAI
 
         #Calculating actual radiation
@@ -428,22 +448,23 @@ if prodSituation == "PS2":
         def POOL (k=-0.6):
             logging.info("  Calculating Pool of assimilates")
             where1 = "VALUE <= 0.9"
-            RUE = arcpy.sa.Con(co_sumt, 1.1, 1, where1)
+            # RUE = arcpy.sa.Con(co_sumt, 1.1, 1, where1)
+            RUE = np.where(co_sumt <= 0.9, 1, 1.1)
             this_LAI = LAI()
-            pRG1 = arcpy.sa.Times(k, this_LAI)
-            pRG2 = arcpy.sa.Exp(pRG1)
+            pRG1 = np.multiply(k, this_LAI)
+            pRG2 = np.exp(pRG1)
             pRG3 = np.subtract(1, pRG2)
-            pRG4 = arcpy.sa.Times(pRG3, this_RAD)
-            pRG5 = arcpy.sa.Times(pRG4, RUE)
+            pRG4 = np.multiply(pRG3, this_RAD)
+            pRG5 = np.multiply(pRG4, RUE)
 
             #Calculating the rate of growth after treatment with Weeds
             this_weedrf = WEEDS()
-            RG = arcpy.sa.Times(pRG5, this_weedrf)
+            RG = np.multiply(pRG5, this_weedrf)
 
-            #mRG = arcpy.sa.Times(RG, Days)
+            #mRG = np.multiply(RG, Days)
             ty = str(i)
             name = "pool" + ty
-            RG.save(output_dir / name)
+            save_raster(img=RG, out_path=output_dir / name)
             return RG
 
 
@@ -454,7 +475,10 @@ if prodSituation == "PS2":
             sumt07 = (-435 * (1.7**2))+(2755 * 1.7)-2320
             where0 = "\"VALUE\" <= %d" % sumt00
             where07 = "\"VALUE\" <= %d" % sumt07
-            copartl = arcpy.sa.Con(co_sumt, 0.55, (arcpy.sa.Con(co_sumt, 0.45, 0, where07)), where0)
+            # _copartl = arcpy.sa.Con(co_sumt, 0.45, 0, where07)
+            # copartl = arcpy.sa.Con(co_sumt, 0.55, _copartl, where0)
+            _copartl = np.where(co_sumt <= sumt07, 0, 0.45)
+            copartl = np.where(co_sumt <= sumt00, _copartl, 0.55)
             return copartl
 
         #Calculating the coefficient of partitioning of roots relative to DVS
@@ -463,7 +487,10 @@ if prodSituation == "PS2":
             sumt08 = (-435 * (1.8**2))+(2755 * 1.8)-2320
             where0 = "\"VALUE\" <= %d" % sumt00
             where08 = "\"VALUE\" < %d" % sumt08
-            copartr = arcpy.sa.Con(co_sumt, 0.3, arcpy.sa.Con(co_sumt, 0.1, 0, where08), where0)
+            # _copartr = arcpy.sa.Con(co_sumt, 0.1, 0, where08)
+            # copartr = arcpy.sa.Con(co_sumt, 0.3, _copartr, where0)
+            _copartr = np.where(co_sumt < sumt08, 0, 0.1)
+            copartr = np.where(co_sumt <= sumt00, _copartr, 0.3)
             return copartr
 
         #Calculating the coefficient of partitioning of panicles relative to DVS
@@ -472,7 +499,10 @@ if prodSituation == "PS2":
             sumt11 = (-435 * (2.1**2))+(2755 * 2.1)-2320
             where075 = "\"VALUE\" > %d" % sumt075
             where11 = "\"VALUE\" >= %d" % sumt11
-            copartp = arcpy.sa.Con(co_sumt, 1, arcpy.sa.Con(co_sumt, 0.3, 0, where075), where11)
+            # _copartp = arcpy.sa.Con(co_sumt, 0.3, 0, where075)
+            # copartp = arcpy.sa.Con(co_sumt, 1, _copartp, where11)
+            _copartp = np.where(co_sumt > sumt075, 0, 0.3)
+            copartp = np.where(co_sumt >= sumt11, _copartp, 1)
             return copartp
         #Calculating the coefficient of partitioning of stems relative to DVS
         this_copartp = COPARTP ()
@@ -491,19 +521,19 @@ if prodSituation == "PS2":
             #Calculate the partitioning of assimilates to leaves
             this_copartr = COPARTR()
             this = np.subtract(1, this_copartr)
-            pr_partl = arcpy.sa.Times(this_POOL, this_copartl)
-            partl = arcpy.sa.Times(pr_partl, this)
+            pr_partl = np.multiply(this_POOL, this_copartl)
+            partl = np.multiply(pr_partl, this)
 
             #Calculate the partitioning of assimilates to panicles
-            pr_partp = arcpy.sa.Times(this_POOL, this_copartp)
-            partp = arcpy.sa.Times(pr_partp, this)
+            pr_partp = np.multiply(this_POOL, this_copartp)
+            partp = np.multiply(pr_partp, this)
 
             #Calculate the partitioning of assimilates to stems
-            pr_partst = arcpy.sa.Times(this_POOL, this_copartst)
-            partst = arcpy.sa.Times(pr_partst, this)
+            pr_partst = np.multiply(this_POOL, this_copartst)
+            partst = np.multiply(pr_partst, this)
 
             #Calculate the partitioning of assimilates to roots
-            partr = arcpy.sa.Times(this_POOL, this_copartr)
+            partr = np.multiply(this_POOL, this_copartr)
 
             return[partl, partp, partst, partr]
 
@@ -511,8 +541,8 @@ if prodSituation == "PS2":
         def RDIST():
             logging.info("  Calculating the redistribution of reserves accumulated in the stems")
             sumt1 = (-435 * (2**2))+(2755 * 2)-2320
-            where1 = "\"VALUE\" < %d" % sumt1
-            rdist = arcpy.sa.Con(co_sumt, 0, 4.42, where1)
+            # where1 = "\"VALUE\" < %d" % sumt1
+            rdist = np.where(co_sumt < sumt1, 4.42, 0)
             return rdist
 
         #Calculating the relative rate of senescence
@@ -524,7 +554,7 @@ if prodSituation == "PS2":
             where1 = "\"VALUE\" <= %d" % sumt13
             #where2 = "\"VALUE\" <= %d" % sumt13
             #where3 = "\"VALUE\" <= %d" % sumt163
-            rrsenl = arcpy.sa.Con(co_sumt, 0, 0.04, where1)
+            rrsenl = np.where(co_sumt <= sumt13, 0.04, 0)
             return rrsenl
 
         #Increase in dry weight of organs
@@ -541,15 +571,15 @@ if prodSituation == "PS2":
         logging.info("  Calculating the dry weight of organs\n")
 
         #Calculate the increase in dry weight for panicles
-        ppanw1 = arcpy.sa.Plus(this_rdist, this_partp)
+        ppanw1 = np.add(this_rdist, this_partp)
 
         #Calculating the  dry weight of panicles after Sheath Rot infection
         this_shrrf = SHR()
-        ppanw2 = arcpy.sa.Times(ppanw1, this_shrrf)
+        ppanw2 = np.multiply(ppanw1, this_shrrf)
 
         #Calculating the dry weight of panicles after Sheath Rot and White Head infections
         this_whrf = WH()
-        ppanw3 = arcpy.sa.Times(ppanw2, this_whrf)
+        ppanw3 = np.multiply(ppanw2, this_whrf)
 
         #Calculate the increase in dry weight for stems
         pstemw = np.subtract(this_partst, this_rdist)
@@ -557,9 +587,9 @@ if prodSituation == "PS2":
 
         #Calculate the increase in dry weight in leaves
         if i == 1:
-            rsenl = arcpy.sa.Times(this_rrsenl, LEAFW)
+            rsenl = np.multiply(this_rrsenl, LEAFW)
         else:
-            rsenl = arcpy.sa.Times(this_rrsenl, thisLEAFW)
+            rsenl = np.multiply(this_rrsenl, thisLEAFW)
 
         pLEAFW = np.subtract(this_partl, rsenl)
 
@@ -567,13 +597,13 @@ if prodSituation == "PS2":
         pleafw2 = np.subtract(pLEAFW, this_trshbl)
 
         if i == 1:
-            thisPANW = arcpy.sa.Plus(ppanw3, PANW)
-            thisSTEMW = arcpy.sa.Plus(pstemw, STEMW)
-            thisROOTW = arcpy.sa.Plus(ROOTW, this_partr)
-            thisLEAFW = arcpy.sa.Plus(LEAFW, pleafw2)
+            thisPANW = np.add(ppanw3, PANW)
+            thisSTEMW = np.add(pstemw, STEMW)
+            thisROOTW = np.add(ROOTW, this_partr)
+            thisLEAFW = np.add(LEAFW, pleafw2)
             ty = str(i)
             name = "leafw" + ty
-            thisLEAFW.save(output_dir / name)
+            save_raster(img=thisLEAFW, out_path=output_dir / name)
         else:
             thisPANW = thisPANW + ppanw3
             thisSTEMW = thisSTEMW + pstemw
@@ -581,10 +611,10 @@ if prodSituation == "PS2":
             thisLEAFW = thisLEAFW + pleafw2
             ty = str(i)
             name = "leafw" + ty
-            thisLEAFW.save(output_dir / name)
+            save_raster(img=thisLEAFW, out_path=output_dir / name)
 
     output =  yields_dir + "Yield_PS2"
-    thisPANW.save(output)
+    save_raster(img=thisPANW, out_path=output)
     logging.info("COMPLETED")
 
 
